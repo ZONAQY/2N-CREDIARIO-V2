@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Crediário — Entrar</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+  <div class="login-wrap">
+    <form class="carne-cover" id="login-form">
+      <h1>CARNÊ DIGITAL</h1>
+      <p class="sub">Acesso restrito — só você entra aqui.</p>
+
+      <div id="login-error" class="login-error" style="display:none;"></div>
+
+      <div class="field">
+        <label for="email">E-mail</label>
+        <input id="email" type="email" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="senha">Senha</label>
+        <input id="senha" type="password" autocomplete="current-password" required>
+      </div>
+      <div class="login-actions">
+        <button class="btn btn-primary" type="submit" id="login-btn">Entrar</button>
+      </div>
+    </form>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script>
+    // se já estiver logado, pula direto pro app
+    supabaseClient.auth.getSession().then(({ data }) => {
+      if (data.session) window.location.href = "app.html";
+    });
+
+    const form = document.getElementById("login-form");
+    const errBox = document.getElementById("login-error");
+    const btn = document.getElementById("login-btn");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errBox.style.display = "none";
+      btn.textContent = "Entrando...";
+      btn.disabled = true;
+
+      const email = document.getElementById("email").value.trim();
+      const senha = document.getElementById("senha").value;
+
+      const { error } = await supabaseClient.auth.signInWithPassword({ email, password: senha });
+
+      if (error) {
+        errBox.textContent = "E-mail ou senha errados. Confira e tente de novo.";
+        errBox.style.display = "block";
+        btn.textContent = "Entrar";
+        btn.disabled = false;
+        return;
+      }
+      window.location.href = "app.html";
+    });
+  </script>
+</body>
+</html>
