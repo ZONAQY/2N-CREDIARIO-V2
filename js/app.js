@@ -1900,13 +1900,15 @@ async function carregarParcelasDaOperacao(contratoId, idBloco = "bloco-parcelas-
   if (error || !parcelas || parcelas.length === 0) { bloco.style.display = "none"; return; }
 
   bloco.style.display = "block";
+  await carregarHistoricoPagamentos(parcelas.map(p => p.id));
   lista.innerHTML = parcelas.map(p => `
     <div class="parcela-row" id="parcela-linha-${p.id}">
       <div class="who" style="flex:0 0 60px;"><div class="n">#${p.numero}</div></div>
-      <input type="date" value="${p.vencimento}" id="parc-venc-${p.id}" style="padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm);">
+      <input type="date" value="${p.vencimento}" id="parc-venc-${p.id}" style="padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm);" title="Vencimento">
       <input type="number" step="0.01" value="${p.valor}" id="parc-valor-${p.id}" style="width:100px; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm);" placeholder="Valor total">
       <input type="number" step="0.01" value="${p.valor_pago || 0}" id="parc-pago-${p.id}" style="width:100px; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm);" placeholder="Já pago">
-      <select id="parc-status-${p.id}" style="padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm);">
+      <input type="date" value="${p.data_pagamento || ""}" id="parc-data-pgto-${p.id}" style="padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm);" title="Data do último pagamento">
+      <select id="parc-status-${p.id}" onchange="autoPreencherPago('${p.id}')" style="padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm);">
         <option value="pendente" ${p.status === "pendente" ? "selected" : ""}>Pendente</option>
         <option value="parcial" ${p.status === "parcial" ? "selected" : ""}>Parcial</option>
         <option value="pago" ${p.status === "pago" ? "selected" : ""}>Pago</option>
@@ -1917,19 +1919,71 @@ async function carregarParcelasDaOperacao(contratoId, idBloco = "bloco-parcelas-
   `).join("");
 }
 
+async function carregarHistoricoPagamentos(parcelaIds) {
+  const el = document.getElementById("historico-pagamentos-operacao");
+  if (!el) return; // esse histórico só existe na tela de Operações por enquanto
+  if (!parcelaIds || parcelaIds.length === 0) { el.innerHTML = `<div class="empty-state">Sem pagamentos ainda.</div>`; return; }
+
+  const { data: movs } = await supabaseClient.from("movimentacoes")
+    .select("*").eq("origem_tipo", "parcela").in("origem_id", parcelaIds).order("data", { ascending: false });
+
+  if (!movs || movs.length === 0) { el.innerHTML = `<div class="empty-state">Sem pagamentos ainda.</div>`; return; }
+
+  el.innerHTML = movs.map(m => `
+    <div class="mov-row" style="padding:8px 12px;">
+      <div class="desc"><div class="m">${fmtData(m.data)} — ${m.categoria || ""}</div></div>
+      <div class="val entrada">+ ${fmtMoeda(m.valor)}</div>
+    </div>
+  `).join("");
+}
+
+// quando marca "Pago", já sugere o valor cheio e a data de hoje — não precisa digitar
+function autoPreencherPago(parcelaId) {
+  const status = document.getElementById(`parc-status-${parcelaId}`).value;
+  if (status === "pago") {
+    document.getElementById(`parc-pago-${parcelaId}`).value = document.getElementById(`parc-valor-${parcelaId}`).value;
+    document.getElementById(`parc-data-pgto-${parcelaId}`).value = new Date().toISOString().slice(0, 10);
+  }
+  if (status === "parcial" && !document.getElementById(`parc-data-pgto-${parcelaId}`).value) {
+    document.getElementById(`parc-data-pgto-${parcelaId}`).value = new Date().toISOString().slice(0, 10);
+  }
+}
+window.autoPreencherPago = autoPreencherPago;
+
 async function salvarParcelaEditada(parcelaId) {
+  const { data: parcelaAntes } = await supabaseClient.from("parcelas").select("*").eq("id", parcelaId).single();
+
   const vencimento = document.getElementById(`parc-venc-${parcelaId}`).value;
   const valor = parseFloat(document.getElementById(`parc-valor-${parcelaId}`).value);
   const valorPago = parseFloat(document.getElementById(`parc-pago-${parcelaId}`).value || 0);
+  const dataPagamento = document.getElementById(`parc-data-pgto-${parcelaId}`).value || null;
   const status = document.getElementById(`parc-status-${parcelaId}`).value;
 
-  const dados = { vencimento, valor, valor_pago: valorPago, status };
-  if (status === "pago") dados.data_pagamento = new Date().toISOString().slice(0, 10);
+  const dados = { vencimento, valor, valor_pago: valorPago, status, data_pagamento: dataPagamento };
   if (status === "pendente") { dados.valor_pago = 0; dados.data_pagamento = null; }
 
   const { error } = await supabaseClient.from("parcelas").update(dados).eq("id", parcelaId);
   if (error) { alert("Erro: " + error.message); return; }
-  alert("Parcela atualizada!");
+
+  // se o valor pago aumentou de verdade, lança a diferença no financeiro (histórico automático)
+  const pagoAntes = Number(parcelaAntes?.valor_pago || 0);
+  const diferenca = dados.valor_pago - pagoAntes;
+  if (diferenca > 0.001) {
+    const { data: info } = await supabaseClient.from("operacoes_status")
+      .select("cliente_nome,cliente_codigo,produto").eq("id", parcelaAntes.contrato_id).single();
+    const nomeCompleto = info ? `${info.cliente_nome} (${info.cliente_codigo || ""}) — ${info.produto || "Empréstimo"}` : "Cliente";
+    await supabaseClient.from("movimentacoes").insert({
+      tipo: "entrada",
+      valor: diferenca,
+      data: dataPagamento || new Date().toISOString().slice(0, 10),
+      categoria: status === "pago" ? "Parcela recebida" : "Parcela recebida (parcial)",
+      descricao: `${nomeCompleto} — Parcela ${parcelaAntes.numero} de ${fmtMoeda(valor)} (editado em Operações)`,
+      origem_tipo: "parcela",
+      origem_id: parcelaId,
+    });
+  }
+
+  alert("Parcela atualizada! " + (diferenca > 0.001 ? "Já lancei no Financeiro também." : ""));
   carregarParcelasDaOperacao(document.getElementById("ctr-editando-id").value);
 }
 window.salvarParcelaEditada = salvarParcelaEditada;
