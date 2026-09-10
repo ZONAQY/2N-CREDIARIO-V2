@@ -1039,6 +1039,7 @@ window.marcarPago = marcarPago;
 
 function abrirModalPagamento(parcelaId, valorRestanteConhecido) {
   document.getElementById("pgto-parcela-id").value = parcelaId;
+  document.getElementById("pgto-data").value = new Date().toISOString().slice(0, 10);
   if (valorRestanteConhecido !== null) {
     document.getElementById("pgto-valor").value = valorRestanteConhecido.toFixed(2);
     document.getElementById("pgto-restante-texto").textContent = `Falta pagar: ${fmtMoeda(valorRestanteConhecido)}`;
@@ -1063,12 +1064,12 @@ async function confirmarPagamento() {
   const { data: parcela, error: buscaErr } = await supabaseClient.from("parcelas").select("*").eq("id", parcelaId).single();
   if (buscaErr || !parcela) { alert("Não consegui carregar essa parcela."); return; }
 
-  const hoje = new Date().toISOString().slice(0, 10);
+  const dataPagamento = document.getElementById("pgto-data").value || new Date().toISOString().slice(0, 10);
   const novoValorPago = Number(parcela.valor_pago || 0) + valorRecebido;
   const quitou = novoValorPago >= Number(parcela.valor) - 0.01; // margem pra centavos
 
   const dadosAtualizacao = { valor_pago: novoValorPago, status: quitou ? "pago" : "parcial" };
-  if (quitou) dadosAtualizacao.data_pagamento = hoje;
+  if (quitou) dadosAtualizacao.data_pagamento = dataPagamento;
 
   const { error: updErr } = await supabaseClient.from("parcelas").update(dadosAtualizacao).eq("id", parcelaId);
   if (updErr) { alert("Erro: " + updErr.message); return; }
@@ -1084,7 +1085,7 @@ async function confirmarPagamento() {
   await supabaseClient.from("movimentacoes").insert({
     tipo: "entrada",
     valor: valorRecebido,
-    data: hoje,
+    data: dataPagamento,
     categoria: quitou ? "Parcela recebida" : "Parcela recebida (parcial)",
     descricao: `${nomeCompleto} — Parcela ${parcela.numero} de ${fmtMoeda(parcela.valor)}${quitou ? "" : " — pagamento parcial"}`,
     origem_tipo: "parcela",
@@ -2976,29 +2977,75 @@ async function loadCobrancaPresencial() {
   el.innerHTML = `<div class="loading-line">Carregando...</div>`;
 
   const [{ data: parcelas, error }, { data: acordos }] = await Promise.all([
-    supabaseClient.from("parcelas_status").select("*").in("status", ["pendente", "parcial"])
-      .eq("tipo_cobranca", "presencial").order("vencimento"),
+    supabaseClient.from("parcelas_status").select("*").eq("status_real", "atrasado").order("vencimento"),
     supabaseClient.from("acordos_status").select("cliente_id").eq("excluido", false),
   ]);
 
   if (error) { el.innerHTML = `<div class="loading-line">Erro: ${error.message}</div>`; return; }
-  if (!parcelas || parcelas.length === 0) { el.innerHTML = `<div class="empty-state">Nada de cobrança presencial pendente. 🎉</div>`; return; }
+  if (!parcelas || parcelas.length === 0) { el.innerHTML = `<div class="empty-state">Ninguém atrasado pra cobrar hoje. 🎉</div>`; return; }
 
   const clientesComAcordo = new Set((acordos || []).map(a => a.cliente_id));
 
-  el.innerHTML = parcelas.map(p => `
-    <div class="parcela-row">
-      <div class="who">
-        <div class="n">${p.cliente_nome} <span class="mono" style="font-weight:400; font-size:12px; color:var(--text-soft);">${p.cliente_codigo || ""}</span> <span class="stamp stamp-${p.status_real}" style="transform:none;">${p.status_real}</span></div>
-        <div class="m">📍 ${p.cliente_endereco || "sem endereço"} · 📞 ${p.cliente_telefone || "sem telefone"}</div>
-        <div class="m">${clientesComAcordo.has(p.cliente_id) ? "✅ já tem acordo feito" : "— sem acordo ainda"}</div>
+  el.innerHTML = parcelas.map(p => {
+    const restante = Number(p.valor) - Number(p.valor_pago || 0);
+    const wa = whatsappLink(p.cliente_telefone);
+    return `
+    <div class="ficha">
+      <div class="ficha-top">
+        <div>
+          <div class="ficha-nome">${p.cliente_nome} <span class="mono" style="font-weight:400; font-size:12px; color:var(--text-soft);">${p.cliente_codigo || ""}</span></div>
+          <div class="ficha-meta">📍 ${p.cliente_endereco || "sem endereço"} · 📞 ${p.cliente_telefone || "sem telefone"} · vence ${fmtData(p.vencimento)} · devendo ${fmtMoeda(restante)}</div>
+          <div class="ficha-meta">${clientesComAcordo.has(p.cliente_id) ? "✅ já tem acordo feito" : "— sem acordo ainda"}</div>
+        </div>
       </div>
-      <div class="venc">vence ${fmtData(p.vencimento)}</div>
-      <div class="val">${fmtMoeda(Number(p.valor) - Number(p.valor_pago || 0))}</div>
-      <button class="btn-mini green" onclick="abrirModalPagamento('${p.id}', ${Number(p.valor) - Number(p.valor_pago || 0)})">💰 Pagamento</button>
+      <div class="form-two" style="margin-top:10px;">
+        <div class="form-row" style="margin-bottom:0;">
+          <label>Valor a negociar (R$)</label>
+          <input type="number" step="0.01" id="rota-valor-${p.id}" value="${restante.toFixed(2)}">
+        </div>
+        <div class="form-row" style="margin-bottom:0;">
+          <label>O que fazer</label>
+          <input type="text" id="rota-descricao-${p.id}" placeholder="Ex: cobrar à tarde, pediu prazo até sexta...">
+        </div>
+      </div>
+      <div class="ficha-actions">
+        ${wa ? `<a class="btn-mini green" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ""}
+        <button class="btn-mini green" onclick="abrirModalPagamento('${p.id}', ${restante})">💰 Registrar pagamento</button>
+        <button class="btn-mini" onclick="fazerAcordoDaRota('${p.cliente_id}', '${p.id}')">🤝 Fazer acordo com esse valor</button>
+        <button class="btn-mini" onclick="salvarNotaRota('${p.id}')">💾 Salvar anotação</button>
+      </div>
     </div>
-  `).join("");
+  `;
+  }).join("");
 }
+
+async function salvarNotaRota(parcelaId) {
+  const valor = document.getElementById(`rota-valor-${parcelaId}`).value;
+  const descricao = document.getElementById(`rota-descricao-${parcelaId}`).value.trim();
+  const { error } = await supabaseClient.from("tentativas_cobranca").insert({
+    parcela_id: parcelaId,
+    cobrador_id: CURRENT_USER.id,
+    resultado: "prometeu_pagar",
+    observacao: `Valor a negociar: ${fmtMoeda(parseFloat(valor) || 0)}. ${descricao}`,
+  });
+  if (error) { alert("Erro: " + error.message); return; }
+  alert("Anotação salva!");
+}
+window.salvarNotaRota = salvarNotaRota;
+
+async function fazerAcordoDaRota(clienteId, parcelaId) {
+  const valorNegociado = document.getElementById(`rota-valor-${parcelaId}`).value;
+  await loadClientesNoSelectAcordo();
+  await loadContratosNoSelectAcordo();
+  await loadEntidadesNoSelect("acr-entidade");
+  cancelarEdicaoAcordo();
+  document.getElementById("form-acordo").reset();
+  document.getElementById("acr-cliente").value = clienteId;
+  document.getElementById("acr-valor").value = valorNegociado;
+  document.getElementById("acr-data-acordo").value = new Date().toISOString().slice(0, 10);
+  document.querySelector('[data-tab="novo-acordo"]').click();
+}
+window.fazerAcordoDaRota = fazerAcordoDaRota;
 
 async function mudarPapel(id, novoPapel) {
   if (!confirm(`Mudar essa pessoa pra "${novoPapel}"?`)) return;
