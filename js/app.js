@@ -136,9 +136,39 @@ function fmtData(d) {
 // ============================================================
 // BOOT — carrega a primeira tela
 // ============================================================
+let TEMPLATE_COBRANCA_CACHE = "Olá {nome}! Sua parcela {parcela}/{total_parcelas} no valor de {valor}, com vencimento em {vencimento}, ainda está em aberto{dias_atraso}. Pode verificar pra gente, por favor?";
+
 function boot() {
   loadDashboard();
   carregarBarraMeta();
+  supabaseClient.from("configuracoes").select("template_cobranca").eq("id", 1).single().then(({ data }) => {
+    if (data?.template_cobranca) TEMPLATE_COBRANCA_CACHE = data.template_cobranca;
+  });
+}
+
+function montarMensagemCobranca(p) {
+  const hoje = new Date();
+  const vencimento = new Date(p.vencimento + "T00:00:00");
+  const diffDias = Math.floor((hoje - vencimento) / (1000 * 60 * 60 * 24));
+  const diasAtrasoTexto = diffDias > 0 ? ` (${diffDias} dia${diffDias === 1 ? "" : "s"} de atraso)` : "";
+  const restante = Number(p.valor) - Number(p.valor_pago || 0);
+
+  return TEMPLATE_COBRANCA_CACHE
+    .replace(/{nome}/g, p.cliente_nome || "")
+    .replace(/{parcela}/g, p.numero || "")
+    .replace(/{total_parcelas}/g, p.num_parcelas || "")
+    .replace(/{valor}/g, fmtMoeda(restante))
+    .replace(/{vencimento}/g, fmtData(p.vencimento))
+    .replace(/{dias_atraso}/g, diasAtrasoTexto);
+}
+
+function whatsappLinkComMensagem(p) {
+  const telefone = p.cliente_telefone;
+  if (!telefone) return null;
+  let digitos = telefone.replace(/\D/g, "");
+  if (digitos.length <= 11) digitos = "55" + digitos;
+  const texto = montarMensagemCobranca(p);
+  return `https://wa.me/${digitos}?text=${encodeURIComponent(texto)}`;
 }
 
 // ============================================================
@@ -187,7 +217,20 @@ async function carregarFormConfiguracoes() {
   document.getElementById("alc-reinvestimento").value = cfg.pct_reinvestimento ?? 30;
   document.getElementById("alc-prolabore").value = cfg.pct_prolabore ?? 30;
   document.getElementById("alc-reserva").value = cfg.pct_reserva ?? 10;
+  document.getElementById("cfg-template-cobranca").value = cfg.template_cobranca || "";
+  TEMPLATE_COBRANCA_CACHE = cfg.template_cobranca || TEMPLATE_COBRANCA_CACHE;
 }
+
+document.getElementById("form-template-cobranca").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = document.getElementById("cfg-template-msg");
+  const texto = document.getElementById("cfg-template-cobranca").value.trim();
+  const { error } = await supabaseClient.from("configuracoes").upsert({ id: 1, template_cobranca: texto });
+  if (error) { msg.textContent = "Erro: " + error.message; msg.className = "form-msg err"; return; }
+  TEMPLATE_COBRANCA_CACHE = texto;
+  msg.textContent = "Mensagem salva!";
+  msg.className = "form-msg ok";
+});
 
 document.getElementById("form-alocacao").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -278,7 +321,7 @@ async function loadDashboard() {
   const amanhaLista = parcelas.filter(p => p.status === "pendente" && p.vencimento === amanhaStr);
 
   function linhaCobranca(p, destaque) {
-    const wa = whatsappLink(p.cliente_telefone);
+    const wa = whatsappLinkComMensagem(p);
     const restante = Number(p.valor) - Number(p.valor_pago || 0);
     return `
       <div class="parcela-row">
@@ -995,7 +1038,7 @@ function renderCobrancas(parcelas) {
   }
 
   el.innerHTML = filtradas.map(p => {
-    const wa = whatsappLink(p.cliente_telefone);
+    const wa = whatsappLinkComMensagem(p);
     const restante = Number(p.valor) - Number(p.valor_pago || 0);
     return `
     <div class="parcela-row">
@@ -3042,7 +3085,7 @@ async function loadCobrancaPresencial() {
 
   el.innerHTML = parcelas.map(p => {
     const restante = Number(p.valor) - Number(p.valor_pago || 0);
-    const wa = whatsappLink(p.cliente_telefone);
+    const wa = whatsappLinkComMensagem(p);
     return `
     <div class="ficha">
       <div class="ficha-top">
