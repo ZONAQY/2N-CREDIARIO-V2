@@ -1054,6 +1054,7 @@ function renderCobrancas(parcelas) {
         ${wa ? `<a class="btn-mini green" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ""}
         <button class="btn-mini" onclick="abrirModalTentativa('${p.id}')">📝 Registrar tentativa</button>
         <button class="btn-mini green" onclick="abrirModalPagamento('${p.id}', ${restante})">💰 Registrar pagamento</button>
+        <button class="btn-mini" onclick="verOperacaoDaCobranca('${p.contrato_id}')">🔍 Ver operação</button>
       </div>
     </div>
   `;
@@ -1083,6 +1084,8 @@ window.marcarPago = marcarPago;
 function abrirModalPagamento(parcelaId, valorRestanteConhecido) {
   document.getElementById("pgto-parcela-id").value = parcelaId;
   document.getElementById("pgto-data").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("pgto-forma-pagamento").value = "Pix";
+  carregarBotoesFormaPagamento("pgto-forma-pagamento", "botoes-forma-pagamento-pgto");
   if (valorRestanteConhecido !== null) {
     document.getElementById("pgto-valor").value = valorRestanteConhecido.toFixed(2);
     document.getElementById("pgto-restante-texto").textContent = `Falta pagar: ${fmtMoeda(valorRestanteConhecido)}`;
@@ -1130,6 +1133,7 @@ async function confirmarPagamento() {
     valor: valorRecebido,
     data: dataPagamento,
     categoria: quitou ? "Parcela recebida" : "Parcela recebida (parcial)",
+    forma_pagamento: document.getElementById("pgto-forma-pagamento").value,
     descricao: `${nomeCompleto} — Parcela ${parcela.numero} de ${fmtMoeda(parcela.valor)}${quitou ? "" : " — pagamento parcial"}`,
     origem_tipo: "parcela",
     origem_id: parcelaId,
@@ -2657,33 +2661,39 @@ async function loadEntidadesNoSelectMov() {
 document.getElementById("mov-data").value = new Date().toISOString().slice(0, 10);
 
 // ---- botões de forma de pagamento (clicável, extensível) ----
-async function carregarBotoesFormaPagamento() {
+async function carregarBotoesFormaPagamento(idInput = "mov-forma-pagamento", idContainer = "botoes-forma-pagamento") {
   const { data } = await supabaseClient.from("formas_pagamento").select("*").order("nome");
-  renderBotoesFormaPagamento(data || []);
+  renderBotoesFormaPagamento(data || [], idInput, idContainer);
 }
 
-function renderBotoesFormaPagamento(formas) {
-  const container = document.getElementById("botoes-forma-pagamento");
-  const atual = document.getElementById("mov-forma-pagamento").value;
+function renderBotoesFormaPagamento(formas, idInput = "mov-forma-pagamento", idContainer = "botoes-forma-pagamento") {
+  const container = document.getElementById(idContainer);
+  const atual = document.getElementById(idInput).value;
   container.innerHTML = formas.map(f => `
-    <button type="button" class="btn-mini ${f.nome === atual ? "green" : ""}" onclick="selecionarFormaPagamento('${f.nome.replace(/'/g, "\\'")}')">${f.nome}</button>
-  `).join("") + `<button type="button" class="btn-mini" onclick="adicionarFormaPagamento()">+ Nova</button>`;
+    <button type="button" class="btn-mini ${f.nome === atual ? "green" : ""}" onclick="selecionarFormaPagamento('${f.nome.replace(/'/g, "\\'")}', '${idInput}', '${idContainer}')">${f.nome}</button>
+  `).join("") + `<button type="button" class="btn-mini" onclick="adicionarFormaPagamento('${idInput}', '${idContainer}')">+ Nova</button>`;
 }
 
-function selecionarFormaPagamento(nome) {
-  document.getElementById("mov-forma-pagamento").value = nome;
-  carregarBotoesFormaPagamento();
+function selecionarFormaPagamento(nome, idInput = "mov-forma-pagamento", idContainer = "botoes-forma-pagamento") {
+  document.getElementById(idInput).value = nome;
+  carregarBotoesFormaPagamento(idInput, idContainer);
 }
 window.selecionarFormaPagamento = selecionarFormaPagamento;
 
-async function adicionarFormaPagamento() {
+async function adicionarFormaPagamento(idInput = "mov-forma-pagamento", idContainer = "botoes-forma-pagamento") {
   const nome = prompt("Nome da nova forma de pagamento (ex: Vale, Transferência):");
   if (!nome || !nome.trim()) return;
   const { error } = await supabaseClient.from("formas_pagamento").insert({ nome: nome.trim() });
   if (error) { alert("Erro: " + error.message); return; }
-  selecionarFormaPagamento(nome.trim());
+  selecionarFormaPagamento(nome.trim(), idInput, idContainer);
 }
 window.adicionarFormaPagamento = adicionarFormaPagamento;
+
+async function verOperacaoDaCobranca(contratoId) {
+  document.querySelector('[data-tab="operacoes"]').click();
+  await editarOperacao(contratoId);
+}
+window.verOperacaoDaCobranca = verOperacaoDaCobranca;
 
 carregarBotoesFormaPagamento();
 
