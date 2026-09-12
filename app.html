@@ -1033,6 +1033,11 @@
           <label>Data do pagamento</label>
           <input type="date" id="pgto-data">
         </div>
+        <div class="form-row">
+          <label>Forma de pagamento</label>
+          <input type="hidden" id="pgto-forma-pagamento" value="Pix">
+          <div id="botoes-forma-pagamento-pgto" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
+        </div>
         <p class="section-desc">Se for menos que o valor total, o resto continua em aberto até quitar.</p>
         <button class="btn btn-primary" type="button" onclick="confirmarPagamento()">Confirmar pagamento</button>
       </div>
